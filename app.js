@@ -1,10 +1,10 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
-const RSS2JSON = "https://api.rss2json.com/v1/api.json?count=20&rss_url=";
+const CORS_PROXY = "https://api.allorigins.win/get?url=";
 const CACHE_KEY = "marketpulse_news";
 const SEEN_KEY = "marketpulse_seen";
 const MAX_NEWS = 120;
-const BUILD_INFO = "v7 · " + "23.03.2026";
+const BUILD_INFO = "v8 · 23.03.2026";
 
 const RSS_SOURCES = [
   { name: "Benzinga",      url: "https://www.benzinga.com/feed" },
@@ -72,21 +72,28 @@ function makeId(source, title) {
 }
 
 async function fetchSource(src) {
-  const url = RSS2JSON + encodeURIComponent(src.url);
-  const resp = await fetch(url, { cache: "no-store" });
+  const ts = Date.now();
+  const feedUrl = src.url + (src.url.includes("?") ? "&" : "?") + "_=" + ts;
+  const proxyUrl = CORS_PROXY + encodeURIComponent(feedUrl);
+  const resp = await fetch(proxyUrl, { cache: "no-store" });
   const data = await resp.json();
-  if (data.status !== "ok" || !data.items) return [];
-  return data.items.slice(0, 15).map(item => {
-    const title = (item.title || "").replace(/<[^>]+>/g,"").trim();
+  if (!data.contents) return [];
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(data.contents, "text/xml");
+  const items = Array.from(doc.querySelectorAll("item")).slice(0, 15);
+  return items.map(item => {
+    const title = (item.querySelector("title")?.textContent || "")
+      .replace(/<!\[CDATA\[|\]\]>/g, "").replace(/<[^>]+>/g, "").trim();
     if (title.length < 10) return null;
+    const link = item.querySelector("link")?.textContent || "#";
+    const pubDate = item.querySelector("pubDate")?.textContent;
     return {
       id: makeId(src.name, title),
       title, source: src.name,
-      time: item.pubDate ? new Date(item.pubDate) : new Date(),
+      time: pubDate ? new Date(pubDate) : new Date(),
       category: classifyNews(title),
       ticker: extractTicker(title),
-      isNew: true, isMock: false,
-      url: item.link || "#",
+      isNew: true, isMock: false, url: link,
     };
   }).filter(Boolean);
 }
@@ -135,6 +142,7 @@ function App() {
   const [flashIds, setFlashIds] = useState(new Set());
   const [notifStatus, setNotifStatus] = useState(Notification.permission);
   const [fetchError, setFetchError] = useState("");
+  const [sourceStatus, setSourceStatus] = useState({});
 
   const audioCtx = useRef(null);
   const seenIds = useRef(loadSeen());
@@ -180,19 +188,36 @@ function App() {
 
   const fetchFeeds = useCallback(async () => {
     setRefreshing(true); setFetchError("");
-    let allFetched = []; let successCount = 0;
+    let allFetched = [];
+    let successCount = 0;
+    const newSourceStatus = {};
+
     const results = await Promise.allSettled(RSS_SOURCES.map(src => fetchSource(src)));
-    results.forEach(result => {
-      if (result.status === "fulfilled") { allFetched = [...allFetched, ...result.value]; successCount++; }
+    results.forEach((result, i) => {
+      const name = RSS_SOURCES[i].name;
+      if (result.status === "fulfilled" && result.value.length > 0) {
+        allFetched = [...allFetched, ...result.value];
+        successCount++;
+        newSourceStatus[name] = "ok";
+      } else {
+        newSourceStatus[name] = "error";
+      }
     });
+
+    setSourceStatus(newSourceStatus);
+
     if (successCount === 0) {
-      setFetchError("לא ניתן להתחבר למקורות. בדוק חיבור לאינטרנט.");
+      setFetchError("לא ניתן לטעון חדשות. בדוק חיבור לאינטרנט.");
       setRefreshing(false); return;
     }
+
     const dedupMap = new Map();
-    for (const item of allFetched) { if (!dedupMap.has(item.id)) dedupMap.set(item.id, item); }
+    for (const item of allFetched) {
+      if (!dedupMap.has(item.id)) dedupMap.set(item.id, item);
+    }
     const deduped = [...dedupMap.values()].sort((a,b) => b.time - a.time);
     const fresh = deduped.filter(item => !seenIds.current.has(item.id));
+
     if (fresh.length > 0) {
       fresh.forEach(item => seenIds.current.add(item.id));
       saveSeen(seenIds.current);
@@ -247,7 +272,6 @@ function App() {
 
   return React.createElement('div', { style:{ minHeight:"100vh", background:"#080b12", color:"#e2e8f0", fontFamily:"'Inter',-apple-system,sans-serif" } },
 
-    // HEADER
     React.createElement('div', { style:{ background:"rgba(8,11,18,0.97)", backdropFilter:"blur(20px)", borderBottom:"1px solid rgba(255,255,255,0.06)", padding:"0 16px", position:"sticky", top:0, zIndex:100, height:56, display:"flex", alignItems:"center", justifyContent:"space-between" } },
       React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:10 } },
         React.createElement('div', { style:{ width:32, height:32, borderRadius:8, background:"linear-gradient(135deg,#0ea5e9,#6366f1)", display:"flex", alignItems:"center", justifyContent:"center" } },
@@ -267,10 +291,8 @@ function App() {
       )
     ),
 
-    // CONTENT
     React.createElement('div', { style:{ maxWidth:640, margin:"0 auto", padding:"12px 12px 40px" } },
 
-      // CONTROLS
       React.createElement('div', { style:{ display:"flex", gap:8, marginBottom:12, alignItems:"center", flexWrap:"wrap" } },
         React.createElement('button', { onClick: isLive?stopLive:startLive, style:{ display:"flex", alignItems:"center", gap:6, padding:"8px 16px", borderRadius:8, border:"none", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, background: isLive?"rgba(239,68,68,0.12)":"linear-gradient(135deg,#0ea5e9,#6366f1)", color: isLive?"#ef4444":"#fff" } },
           React.createElement('div', { style:{ width:6, height:6, borderRadius:"50%", background: isLive?"#ef4444":"rgba(255,255,255,0.9)", animation: isLive&&!refreshing?"livePulse 1.5s infinite":"none" } }),
@@ -282,10 +304,18 @@ function App() {
         newCount>0&&React.createElement('div', { style:{ marginLeft:"auto", background:"rgba(251,146,60,0.1)", color:"#fb923c", border:"1px solid rgba(251,146,60,0.2)", borderRadius:20, padding:"4px 10px", fontSize:11, fontWeight:700 } }, `+${newCount} new`)
       ),
 
-      // ERROR
+      // SOURCE STATUS
+      isLive&&React.createElement('div', { style:{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 } },
+        RSS_SOURCES.map(src =>
+          React.createElement('div', { key:src.name, style:{ display:"flex", alignItems:"center", gap:4, fontSize:9, color: sourceStatus[src.name]==="ok"?"#22c55e":sourceStatus[src.name]==="error"?"#ef4444":"#475569" } },
+            React.createElement('div', { style:{ width:5, height:5, borderRadius:"50%", background: sourceStatus[src.name]==="ok"?"#22c55e":sourceStatus[src.name]==="error"?"#ef4444":"#334155" } }),
+            src.name
+          )
+        )
+      ),
+
       fetchError&&React.createElement('div', { style:{ background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.2)", borderRadius:8, padding:"10px 14px", marginBottom:12, fontSize:12, color:"#f87171" } }, "⚠ "+fetchError),
 
-      // AI SUMMARY
       aiSummary&&React.createElement('div', { style:{ background:"rgba(167,139,250,0.05)", border:"1px solid rgba(167,139,250,0.12)", borderRadius:12, padding:"14px 16px", marginBottom:12 } },
         React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:6, marginBottom:10 } },
           React.createElement('span', { style:{ fontSize:11, fontWeight:600, color:"#a78bfa" } }, "✦ AI Market Brief"),
@@ -294,7 +324,6 @@ function App() {
         React.createElement('div', { style:{ fontSize:12, lineHeight:1.75, color:"#cbd5e1", whiteSpace:"pre-wrap" } }, aiSummary)
       ),
 
-      // FILTERS
       React.createElement('div', { style:{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:12, alignItems:"center" } },
         React.createElement('button', { onClick:()=>setFilter("all"), style:{ padding:"5px 11px", borderRadius:6, border:`1px solid ${filter==="all"?"rgba(255,255,255,0.2)":"rgba(255,255,255,0.06)"}`, background:filter==="all"?"rgba(255,255,255,0.1)":"transparent", color:filter==="all"?"#f1f5f9":"#475569", fontSize:11, fontWeight:filter==="all"?700:400, cursor:"pointer", fontFamily:"inherit" } }, "All"),
         ...Object.entries(CATEGORY_CONFIG).map(([cat,c])=>
@@ -305,7 +334,6 @@ function App() {
         )
       ),
 
-      // NEWS LIST
       React.createElement('div', { style:{ display:"flex", flexDirection:"column", gap:2 } },
         filtered.length===0&&React.createElement('div', { style:{ textAlign:"center", padding:"48px 0", color:"#334155" } },
           React.createElement('div', { style:{ fontSize:24, marginBottom:8 } }, "◇"),
@@ -340,7 +368,6 @@ function App() {
         })
       ),
 
-      // FOOTER
       React.createElement('div', { style:{ marginTop:32, textAlign:"center", borderTop:"1px solid rgba(255,255,255,0.04)", paddingTop:16 } },
         React.createElement('div', { style:{ fontSize:11, color:"#334155", marginBottom:4, fontWeight:500 } }, "Built by Assaf Peled"),
         React.createElement('div', { style:{ fontSize:10, color:"#1e293b" } }, "Version: "+BUILD_INFO),
