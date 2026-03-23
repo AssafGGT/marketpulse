@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <meta name="theme-color" content="#0a0b0e" />
+  <meta name="theme-color" content="#080b12" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="MarketPulse" />
@@ -24,14 +24,20 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" src="app.js?v=3"></script>
   <script>
+    // נקה cache ישן אוטומטית
+    const APP_VERSION = "4";
+    if (localStorage.getItem("mp_version") !== APP_VERSION) {
+      localStorage.clear();
+      localStorage.setItem("mp_version", APP_VERSION);
+    }
+    // בטל service workers ישנים
     if ('serviceWorker' in navigator) {
-      // מחק service workers ישנים כדי למנוע cache בעיות
       navigator.serviceWorker.getRegistrations().then(regs => {
         regs.forEach(reg => reg.unregister());
       });
     }
   </script>
+  <script type="text/babel" src="app.js?v=4"></script>
 </body>
 </html>
