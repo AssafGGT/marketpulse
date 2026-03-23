@@ -1,6 +1,6 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
-const CORS_PROXY = "https://api.allorigins.win/get?url=";
+const CORS_PROXY = "https://corsproxy.io/?url=";
 const CACHE_KEY = "marketpulse_news";
 const SEEN_KEY = "marketpulse_seen";
 const MAX_NEWS = 120;
@@ -24,14 +24,12 @@ const CATEGORY_CONFIG = {
 
 const SOURCE_COLORS = { "Benzinga":"#38bdf8", "MarketWatch":"#fb923c", "Reuters":"#f87171", "Seeking Alpha":"#fbbf24" };
 
-// כתבות דמו — מוצגות אפורות, לא "חדשות"
 const MOCK_NEWS = [
   { id:"m1", title:"NVDA: Analyst Raises Price Target to $1,200, Maintains Buy Rating", source:"Benzinga", time:new Date(Date.now()-3600000), category:"upgrade", ticker:"NVDA", isNew:false, isMock:true, url:"#" },
   { id:"m2", title:"Apple Reports Q1 Earnings Beat; Revenue Up 8% Year-Over-Year", source:"Reuters", time:new Date(Date.now()-7200000), category:"earnings", ticker:"AAPL", isNew:false, isMock:true, url:"#" },
   { id:"m3", title:"Microsoft Announces $10 Billion Share Buyback Program", source:"MarketWatch", time:new Date(Date.now()-10800000), category:"corporate", ticker:"MSFT", isNew:false, isMock:true, url:"#" },
   { id:"m4", title:"Tesla Downgraded to Neutral at Goldman; Target Cut to $185", source:"Benzinga", time:new Date(Date.now()-14400000), category:"downgrade", ticker:"TSLA", isNew:false, isMock:true, url:"#" },
   { id:"m5", title:"Fed Minutes: Officials Signal Caution on Rate Cuts Ahead", source:"Reuters", time:new Date(Date.now()-18000000), category:"macro", ticker:null, isNew:false, isMock:true, url:"#" },
-  { id:"m6", title:"META Initiates $50B Buyback; Q4 Revenue Beats Estimates", source:"MarketWatch", time:new Date(Date.now()-21600000), category:"earnings", ticker:"META", isNew:false, isMock:true, url:"#" },
 ];
 
 function timeAgo(date) {
@@ -110,9 +108,7 @@ function loadCache() {
 
 function saveCache(news) {
   try {
-    // אל תשמור כתבות mock
-    const real = news.filter(n => !n.isMock);
-    localStorage.setItem(CACHE_KEY, JSON.stringify(real.slice(0, MAX_NEWS)));
+    localStorage.setItem(CACHE_KEY, JSON.stringify(news.filter(n => !n.isMock).slice(0, MAX_NEWS)));
   } catch {}
 }
 
@@ -131,12 +127,7 @@ async function requestNotificationPermission() {
   if (!("Notification" in window)) return "not_supported";
   if (Notification.permission === "granted") return "granted";
   if (Notification.permission === "denied") return "denied";
-  try {
-    const result = await Notification.requestPermission();
-    return result;
-  } catch {
-    return "error";
-  }
+  try { return await Notification.requestPermission(); } catch { return "error"; }
 }
 function App() {
   const cached = loadCache();
@@ -184,14 +175,14 @@ function App() {
   }, [soundEnabled]);
 
   const sendNotification = useCallback((item) => {
-    if (Notification.permission !== "granted") return;
+    if (Notification.permission !== "granted" || !alertsEnabled) return;
     const cat = CATEGORY_CONFIG[item.category] || {};
     try {
       new Notification(`${cat.icon || "◈"} ${item.ticker ? item.ticker + " · " : ""}${item.source}`, {
         body: item.title, icon: "icons/icon-192.png", vibrate: [100, 50, 100], tag: item.id,
       });
     } catch {}
-  }, []);
+  }, [alertsEnabled]);
 
   const handleAlertsToggle = async () => {
     if (notifStatus === "granted") {
@@ -199,19 +190,14 @@ function App() {
       return;
     }
     if (notifStatus === "denied") {
-      alert("התראות חסומות בדפדפן. כנס להגדרות האתר ואשר התראות ידנית.");
+      alert("התראות חסומות. לחץ על המנעול 🔒 ליד הכתובת ← הרשאות אתר ← התראות ← אפשר");
       return;
     }
     const result = await requestNotificationPermission();
     setNotifStatus(result);
-    if (result === "granted") {
-      setAlertsEnabled(true);
-      playAlert();
-    } else if (result === "denied") {
-      alert("לא אושרו התראות. ניתן לשנות זאת בהגדרות הדפדפן.");
-    } else if (result === "not_supported") {
-      alert("הדפדפן לא תומך בהתראות.");
-    }
+    if (result === "granted") { setAlertsEnabled(true); playAlert(); }
+    else if (result === "denied") alert("לא אושרו התראות. ניתן לשנות בהגדרות הדפדפן.");
+    else if (result === "not_supported") alert("הדפדפן לא תומך בהתראות.");
   };
 
   const fetchFeeds = useCallback(async () => {
@@ -219,11 +205,13 @@ function App() {
     let allFetched = [];
     for (const src of RSS_SOURCES) {
       try {
-        const resp = await fetch(`${CORS_PROXY}${encodeURIComponent(src.url)}`);
-        const data = await resp.json();
-        allFetched = [...allFetched, ...parseRSSItems(data.contents, src.name)];
+        const url = CORS_PROXY + encodeURIComponent(src.url);
+        const resp = await fetch(url, { cache: "no-store" });
+        const text = await resp.text();
+        allFetched = [...allFetched, ...parseRSSItems(text, src.name)];
       } catch {}
     }
+
     const dedupMap = new Map();
     for (const item of allFetched) {
       if (!dedupMap.has(item.id)) dedupMap.set(item.id, item);
@@ -238,7 +226,6 @@ function App() {
       setFlashIds(freshIds);
       setTimeout(() => setFlashIds(new Set()), 4000);
       setNews(prev => {
-        // הסר mock כשמגיעות חדשות אמיתיות
         const realPrev = prev.filter(n => !n.isMock);
         const existingIds = new Set(realPrev.map(n => n.id));
         const trulyNew = fresh.filter(n => !existingIds.has(n.id));
@@ -300,7 +287,6 @@ function App() {
     if (alertsEnabled && notifStatus === "granted") return "🔔 On";
     return "🔔 Off";
   };
-
   const alertBtnColor = notifStatus === "denied" ? "#ef4444" : alertsEnabled ? "#22c55e" : "#64748b";
   const alertBtnBorder = notifStatus === "denied" ? "rgba(239,68,68,0.3)" : alertsEnabled ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.08)";
   const alertBtnBg = notifStatus === "denied" ? "rgba(239,68,68,0.08)" : alertsEnabled ? "rgba(34,197,94,0.08)" : "rgba(255,255,255,0.04)";
@@ -333,7 +319,7 @@ function App() {
           React.createElement('div', { style:{ width:6, height:6, borderRadius:"50%", background: isLive?"#ef4444":"#fff", animation: isLive&&!refreshing?"livePulse 1.5s infinite":"none" } }),
           isLive?(refreshing?"Fetching...":"Stop Live"):"Go Live"
         ),
-        React.createElement('button', { onClick: handleAlertsToggle, style:{ padding:"8px 12px", borderRadius:8, border:`1px solid ${alertBtnBorder}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500, background: alertBtnBg, color: alertBtnColor } }, alertBtnLabel()),
+        React.createElement('button', { onClick:handleAlertsToggle, style:{ padding:"8px 12px", borderRadius:8, border:`1px solid ${alertBtnBorder}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500, background:alertBtnBg, color:alertBtnColor } }, alertBtnLabel()),
         React.createElement('button', { onClick:()=>setSoundEnabled(s=>!s), style:{ padding:"8px 12px", borderRadius:8, border:`1px solid ${soundEnabled?"rgba(251,191,36,0.3)":"rgba(255,255,255,0.08)"}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, background: soundEnabled?"rgba(251,191,36,0.08)":"rgba(255,255,255,0.04)", color: soundEnabled?"#fbbf24":"#64748b" } }, soundEnabled?"🔊":"🔇"),
         React.createElement('button', { onClick:getAiSummary, disabled:aiLoading, style:{ padding:"8px 12px", borderRadius:8, border:"1px solid rgba(167,139,250,0.3)", cursor:aiLoading?"wait":"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500, background:"rgba(167,139,250,0.08)", color:"#a78bfa", opacity:aiLoading?0.6:1 } }, aiLoading?"✦ Analyzing...":"✦ AI Brief"),
         newCount>0&&React.createElement('div', { style:{ marginLeft:"auto", background:"rgba(251,146,60,0.1)", color:"#fb923c", border:"1px solid rgba(251,146,60,0.2)", borderRadius:20, padding:"4px 10px", fontSize:11, fontWeight:700 } }, `+${newCount} new`)
@@ -363,38 +349,29 @@ function App() {
           React.createElement('div', { style:{ fontSize:13 } }, "No news in this category")
         ),
         filtered.map((item)=>{
-          const cat = CATEGORY_CONFIG[item.category] || CATEGORY_CONFIG.analysis;
-          const srcColor = SOURCE_COLORS[item.source] || "#64748b";
+          const cat = CATEGORY_CONFIG[item.category]||CATEGORY_CONFIG.analysis;
+          const srcColor = SOURCE_COLORS[item.source]||"#64748b";
           const isFlashing = flashIds.has(item.id);
           const isMock = item.isMock;
           return React.createElement('div', {
-            key: item.id,
-            onClick: ()=>!isMock&&item.url&&item.url!=="#"&&window.open(item.url,"_blank"),
-            style:{
-              background: isFlashing?"rgba(14,165,233,0.07)": isMock?"rgba(255,255,255,0.01)":"rgba(255,255,255,0.025)",
-              border:`1px solid ${isFlashing?"rgba(14,165,233,0.18)":"rgba(255,255,255,0.05)"}`,
-              borderLeft:`3px solid ${isFlashing?"#0ea5e9": isMock?"#1e293b":cat.color}`,
-              borderRadius:8, padding:"12px 14px",
-              cursor: !isMock&&item.url!=="#"?"pointer":"default",
-              transition:"all 0.3s",
-              animation: isFlashing?"flashIn 0.4s ease":"none",
-              marginBottom:2,
-              opacity: isMock?0.4:1,
-            },
-            onMouseEnter: e=>{ if(!isMock) e.currentTarget.style.background="rgba(255,255,255,0.04)"; },
-            onMouseLeave: e=>{ e.currentTarget.style.background = isFlashing?"rgba(14,165,233,0.07)": isMock?"rgba(255,255,255,0.01)":"rgba(255,255,255,0.025)"; },
+            key:item.id,
+            onClick:()=>!isMock&&item.url&&item.url!=="#"&&window.open(item.url,"_blank"),
+            style:{ background:isFlashing?"rgba(14,165,233,0.07)":isMock?"rgba(255,255,255,0.01)":"rgba(255,255,255,0.025)", border:`1px solid ${isFlashing?"rgba(14,165,233,0.18)":"rgba(255,255,255,0.05)"}`, borderLeft:`3px solid ${isFlashing?"#0ea5e9":isMock?"#1e293b":cat.color}`, borderRadius:8, padding:"12px 14px", cursor:!isMock&&item.url!=="#"?"pointer":"default", transition:"all 0.3s", animation:isFlashing?"flashIn 0.4s ease":"none", marginBottom:2, opacity:isMock?0.35:1 },
+            onMouseEnter:e=>{ if(!isMock) e.currentTarget.style.background="rgba(255,255,255,0.04)"; },
+            onMouseLeave:e=>{ e.currentTarget.style.background=isFlashing?"rgba(14,165,233,0.07)":isMock?"rgba(255,255,255,0.01)":"rgba(255,255,255,0.025)"; },
           },
             React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:6, marginBottom:7 } },
-              React.createElement('span', { style:{ fontSize:9, fontWeight:700, letterSpacing:"0.5px", color: isMock?"#334155":cat.color, background: isMock?"rgba(255,255,255,0.03)":cat.bg, border:`1px solid ${isMock?"rgba(255,255,255,0.06)":cat.border}`, padding:"2px 7px", borderRadius:4 } }, cat.icon+" "+cat.label),
-              item.ticker&&React.createElement('span', { style:{ fontSize:10, fontWeight:700, color: isMock?"#334155":"#94a3b8", background:"rgba(148,163,184,0.08)", border:"1px solid rgba(148,163,184,0.1)", padding:"2px 7px", borderRadius:4 } }, item.ticker),
-              isFlashing&&React.createElement('span', { style:{ fontSize:9, fontWeight:700, color:"#0ea5e9", background:"rgba(14,165,233,0.1)", border:"1px solid rgba(14,165,233,0.25)", padding:"2px 7px", borderRadius:4, marginLeft:"auto" } }, "NEW")
-            ),
-            React.createElement('div', { style:{ fontSize:13, lineHeight:1.55, color: isMock?"#334155":"#e2e8f0", fontWeight:450, marginBottom:8 } }, item.title),
-            React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:8 } },
-              React.createElement('span', { style:{ fontSize:10, fontWeight:600, color: isMock?"#334155":srcColor } }, item.source),
-              React.createElement('span', { style:{ fontSize:10, color:"#1e293b" } }, "·"),
-              React.createElement('span', { style:{ fontSize:10, color: isMock?"#1e293b":"#475569" } }, timeAgo(item.time)),
+              React.createElement('span', { style:{ fontSize:9, fontWeight:700, letterSpacing:"0.5px", color:isMock?"#334155":cat.color, background:isMock?"rgba(255,255,255,0.03)":cat.bg, border:`1px solid ${isMock?"rgba(255,255,255,0.06)":cat.border}`, padding:"2px 7px", borderRadius:4 } }, cat.icon+" "+cat.label),
+              item.ticker&&React.createElement('span', { style:{ fontSize:10, fontWeight:700, color:isMock?"#334155":"#94a3b8", background:"rgba(148,163,184,0.08)", border:"1px solid rgba(148,163,184,0.1)", padding:"2px 7px", borderRadius:4 } }, item.ticker),
+              isFlashing&&React.createElement('span', { style:{ fontSize:9, fontWeight:700, color:"#0ea5e9", background:"rgba(14,165,233,0.1)", border:"1px solid rgba(14,165,233,0.25)", padding:"2px 7px", borderRadius:4, marginLeft:"auto" } }, "NEW"),
               isMock&&React.createElement('span', { style:{ fontSize:9, color:"#1e293b", marginLeft:"auto" } }, "example")
+            ),
+            React.createElement('div', { style:{ fontSize:13, lineHeight:1.55, color:isMock?"#334155":"#e2e8f0", fontWeight:450, marginBottom:8 } }, item.title),
+            React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:8 } },
+              React.createElement('span', { style:{ fontSize:10, fontWeight:600, color:isMock?"#334155":srcColor } }, item.source),
+              React.createElement('span', { style:{ fontSize:10, color:"#1e293b" } }, "·"),
+              React.createElement('span', { style:{ fontSize:10, color:isMock?"#1e293b":"#475569" } }, timeAgo(item.time)),
+              !isMock&&item.url&&item.url!=="#"&&React.createElement('span', { style:{ marginLeft:"auto", fontSize:11, color:"#334155" } }, "↗")
             )
           );
         })
