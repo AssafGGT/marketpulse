@@ -1,8 +1,8 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
 const CORS_PROXY = "https://api.allorigins.win/get?url=";
-const CACHE_KEY = "marketpulse_v3";
-const SEEN_KEY = "marketpulse_seen_v3";
+const CACHE_KEY = "marketpulse_news";
+const SEEN_KEY = "marketpulse_seen";
 const MAX_NEWS = 120;
 
 const RSS_SOURCES = [
@@ -24,13 +24,14 @@ const CATEGORY_CONFIG = {
 
 const SOURCE_COLORS = { "Benzinga":"#38bdf8", "MarketWatch":"#fb923c", "Reuters":"#f87171", "Seeking Alpha":"#fbbf24" };
 
+// כתבות דמו — מוצגות אפורות, לא "חדשות"
 const MOCK_NEWS = [
-  { id:"m1", title:"NVDA: Analyst Raises Price Target to $1,200, Maintains Buy Rating", source:"Benzinga", time:new Date(Date.now()-90000), category:"upgrade", ticker:"NVDA", isNew:false, url:"#" },
-  { id:"m2", title:"Apple Reports Q1 Earnings Beat; Revenue Up 8% Year-Over-Year", source:"Reuters", time:new Date(Date.now()-300000), category:"earnings", ticker:"AAPL", isNew:false, url:"#" },
-  { id:"m3", title:"Microsoft Announces $10 Billion Share Buyback Program", source:"MarketWatch", time:new Date(Date.now()-600000), category:"corporate", ticker:"MSFT", isNew:false, url:"#" },
-  { id:"m4", title:"Tesla Downgraded to Neutral at Goldman; Target Cut to $185", source:"Benzinga", time:new Date(Date.now()-900000), category:"downgrade", ticker:"TSLA", isNew:false, url:"#" },
-  { id:"m5", title:"Fed Minutes: Officials Signal Caution on Rate Cuts Ahead", source:"Reuters", time:new Date(Date.now()-1200000), category:"macro", ticker:null, isNew:false, url:"#" },
-  { id:"m6", title:"META Initiates $50B Buyback; Q4 Revenue Beats Estimates", source:"MarketWatch", time:new Date(Date.now()-1500000), category:"earnings", ticker:"META", isNew:false, url:"#" },
+  { id:"m1", title:"NVDA: Analyst Raises Price Target to $1,200, Maintains Buy Rating", source:"Benzinga", time:new Date(Date.now()-3600000), category:"upgrade", ticker:"NVDA", isNew:false, isMock:true, url:"#" },
+  { id:"m2", title:"Apple Reports Q1 Earnings Beat; Revenue Up 8% Year-Over-Year", source:"Reuters", time:new Date(Date.now()-7200000), category:"earnings", ticker:"AAPL", isNew:false, isMock:true, url:"#" },
+  { id:"m3", title:"Microsoft Announces $10 Billion Share Buyback Program", source:"MarketWatch", time:new Date(Date.now()-10800000), category:"corporate", ticker:"MSFT", isNew:false, isMock:true, url:"#" },
+  { id:"m4", title:"Tesla Downgraded to Neutral at Goldman; Target Cut to $185", source:"Benzinga", time:new Date(Date.now()-14400000), category:"downgrade", ticker:"TSLA", isNew:false, isMock:true, url:"#" },
+  { id:"m5", title:"Fed Minutes: Officials Signal Caution on Rate Cuts Ahead", source:"Reuters", time:new Date(Date.now()-18000000), category:"macro", ticker:null, isNew:false, isMock:true, url:"#" },
+  { id:"m6", title:"META Initiates $50B Buyback; Q4 Revenue Beats Estimates", source:"MarketWatch", time:new Date(Date.now()-21600000), category:"earnings", ticker:"META", isNew:false, isMock:true, url:"#" },
 ];
 
 function timeAgo(date) {
@@ -91,7 +92,7 @@ function parseRSSItems(xmlText, sourceName) {
         time: pubDate ? new Date(pubDate) : new Date(),
         category: classifyNews(title),
         ticker: extractTicker(title),
-        isNew: true, url: link,
+        isNew: true, isMock: false, url: link,
       });
       if (results.length >= 10) break;
     }
@@ -108,7 +109,11 @@ function loadCache() {
 }
 
 function saveCache(news) {
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify(news.slice(0, MAX_NEWS))); } catch {}
+  try {
+    // אל תשמור כתבות mock
+    const real = news.filter(n => !n.isMock);
+    localStorage.setItem(CACHE_KEY, JSON.stringify(real.slice(0, MAX_NEWS)));
+  } catch {}
 }
 
 function loadSeen() {
@@ -121,11 +126,24 @@ function loadSeen() {
 function saveSeen(ids) {
   try { localStorage.setItem(SEEN_KEY, JSON.stringify([...ids].slice(-800))); } catch {}
 }
+
+async function requestNotificationPermission() {
+  if (!("Notification" in window)) return "not_supported";
+  if (Notification.permission === "granted") return "granted";
+  if (Notification.permission === "denied") return "denied";
+  try {
+    const result = await Notification.requestPermission();
+    return result;
+  } catch {
+    return "error";
+  }
+}
 function App() {
   const cached = loadCache();
-  const [news, setNews] = useState(cached && cached.length > 0 ? cached : MOCK_NEWS);
+  const initialNews = (cached && cached.length > 0) ? cached : MOCK_NEWS;
+  const [news, setNews] = useState(initialNews);
   const [filter, setFilter] = useState("all");
-  const [alertsEnabled, setAlertsEnabled] = useState(false);
+  const [alertsEnabled, setAlertsEnabled] = useState(Notification.permission === "granted");
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [isLive, setIsLive] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(new Date());
@@ -135,11 +153,17 @@ function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [now, setNow] = useState(new Date());
   const [flashIds, setFlashIds] = useState(new Set());
+  const [notifStatus, setNotifStatus] = useState(Notification.permission);
+
   const audioCtx = useRef(null);
   const seenIds = useRef(loadSeen());
   const intervalRef = useRef(null);
 
-  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   useEffect(() => { saveCache(news); }, [news]);
 
   const playAlert = useCallback(() => {
@@ -153,24 +177,41 @@ function App() {
         osc.frequency.value = freq; osc.type = "sine";
         gain.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.1);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.1 + 0.25);
-        osc.start(ctx.currentTime + i * 0.1); osc.stop(ctx.currentTime + i * 0.1 + 0.25);
+        osc.start(ctx.currentTime + i * 0.1);
+        osc.stop(ctx.currentTime + i * 0.1 + 0.25);
       });
     } catch {}
   }, [soundEnabled]);
 
   const sendNotification = useCallback((item) => {
-    if (!alertsEnabled || Notification.permission !== "granted") return;
+    if (Notification.permission !== "granted") return;
     const cat = CATEGORY_CONFIG[item.category] || {};
-    new Notification(`${cat.icon || "◈"} ${item.ticker ? item.ticker + " · " : ""}${item.source}`, {
-      body: item.title, icon: "icons/icon-192.png", vibrate: [100, 50, 100], tag: item.id,
-    });
-  }, [alertsEnabled]);
+    try {
+      new Notification(`${cat.icon || "◈"} ${item.ticker ? item.ticker + " · " : ""}${item.source}`, {
+        body: item.title, icon: "icons/icon-192.png", vibrate: [100, 50, 100], tag: item.id,
+      });
+    } catch {}
+  }, []);
 
-  const requestAlerts = async () => {
-    if (!("Notification" in window)) { alert("הדפדפן לא תומך בהתראות"); return; }
-    const perm = await Notification.requestPermission();
-    setAlertsEnabled(perm === "granted");
-    if (perm === "granted") playAlert();
+  const handleAlertsToggle = async () => {
+    if (notifStatus === "granted") {
+      setAlertsEnabled(a => !a);
+      return;
+    }
+    if (notifStatus === "denied") {
+      alert("התראות חסומות בדפדפן. כנס להגדרות האתר ואשר התראות ידנית.");
+      return;
+    }
+    const result = await requestNotificationPermission();
+    setNotifStatus(result);
+    if (result === "granted") {
+      setAlertsEnabled(true);
+      playAlert();
+    } else if (result === "denied") {
+      alert("לא אושרו התראות. ניתן לשנות זאת בהגדרות הדפדפן.");
+    } else if (result === "not_supported") {
+      alert("הדפדפן לא תומך בהתראות.");
+    }
   };
 
   const fetchFeeds = useCallback(async () => {
@@ -180,56 +221,59 @@ function App() {
       try {
         const resp = await fetch(`${CORS_PROXY}${encodeURIComponent(src.url)}`);
         const data = await resp.json();
-        const items = parseRSSItems(data.contents, src.name);
-        allFetched = [...allFetched, ...items];
+        allFetched = [...allFetched, ...parseRSSItems(data.contents, src.name)];
       } catch {}
     }
-
-    // Deduplicate by id across all sources
     const dedupMap = new Map();
     for (const item of allFetched) {
       if (!dedupMap.has(item.id)) dedupMap.set(item.id, item);
     }
-    const deduped = [...dedupMap.values()];
-    deduped.sort((a, b) => b.time - a.time);
-
+    const deduped = [...dedupMap.values()].sort((a, b) => b.time - a.time);
     const fresh = deduped.filter(item => !seenIds.current.has(item.id));
 
     if (fresh.length > 0) {
       fresh.forEach(item => seenIds.current.add(item.id));
       saveSeen(seenIds.current);
-
       const freshIds = new Set(fresh.map(i => i.id));
       setFlashIds(freshIds);
       setTimeout(() => setFlashIds(new Set()), 4000);
-
       setNews(prev => {
-        const existingIds = new Set(prev.map(n => n.id));
+        // הסר mock כשמגיעות חדשות אמיתיות
+        const realPrev = prev.filter(n => !n.isMock);
+        const existingIds = new Set(realPrev.map(n => n.id));
         const trulyNew = fresh.filter(n => !existingIds.has(n.id));
-        const merged = [...trulyNew, ...prev];
-        // Deduplicate merged list
-        const seen = new Set();
-        const unique = merged.filter(n => { if (seen.has(n.id)) return false; seen.add(n.id); return true; });
-        unique.sort((a, b) => b.time - a.time);
-        return unique.slice(0, MAX_NEWS);
+        const merged = [...trulyNew, ...realPrev];
+        const seenMerge = new Set();
+        const unique = merged.filter(n => {
+          if (seenMerge.has(n.id)) return false;
+          seenMerge.add(n.id); return true;
+        });
+        return unique.sort((a, b) => b.time - a.time).slice(0, MAX_NEWS);
       });
-
       setNewCount(c => c + fresh.length);
-      fresh.slice(0, 3).forEach((item, i) => {
-        setTimeout(() => { playAlert(); sendNotification(item); }, i * 400);
-      });
+      if (alertsEnabled) {
+        fresh.slice(0, 3).forEach((item, i) => {
+          setTimeout(() => { playAlert(); sendNotification(item); }, i * 400);
+        });
+      }
     }
     setLastUpdate(new Date());
     setRefreshing(false);
-  }, [playAlert, sendNotification]);
+  }, [playAlert, sendNotification, alertsEnabled]);
 
-  const startLive = () => { setIsLive(true); setNewCount(0); fetchFeeds(); intervalRef.current = setInterval(fetchFeeds, 60000); };
+  const startLive = () => {
+    setIsLive(true); setNewCount(0);
+    fetchFeeds();
+    intervalRef.current = setInterval(fetchFeeds, 60000);
+  };
   const stopLive = () => { setIsLive(false); clearInterval(intervalRef.current); };
   useEffect(() => () => clearInterval(intervalRef.current), []);
 
   const getAiSummary = async () => {
     setAiLoading(true); setAiSummary("");
-    const headlines = news.slice(0, 12).map(n => `- ${n.title}`).join("\n");
+    const realNews = news.filter(n => !n.isMock);
+    const headlines = realNews.slice(0, 12).map(n => `- ${n.title}`).join("\n");
+    if (!headlines) { setAiSummary("לחץ Go Live קודם כדי לטעון חדשות."); setAiLoading(false); return; }
     try {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -242,11 +286,7 @@ function App() {
     setAiLoading(false);
   };
 
-  // FILTER — זה הקריטי שתוקן
-  const filtered = news.filter(item => {
-    if (filter === "all") return true;
-    return item.category === filter;
-  });
+  const filtered = news.filter(item => filter === "all" || item.category === filter);
 
   const marketOpen = (() => {
     const d = new Date();
@@ -255,9 +295,18 @@ function App() {
     return day >= 1 && day <= 5 && mins >= 870 && mins < 1230;
   })();
 
+  const alertBtnLabel = () => {
+    if (notifStatus === "denied") return "🔕 חסום";
+    if (alertsEnabled && notifStatus === "granted") return "🔔 On";
+    return "🔔 Off";
+  };
+
+  const alertBtnColor = notifStatus === "denied" ? "#ef4444" : alertsEnabled ? "#22c55e" : "#64748b";
+  const alertBtnBorder = notifStatus === "denied" ? "rgba(239,68,68,0.3)" : alertsEnabled ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.08)";
+  const alertBtnBg = notifStatus === "denied" ? "rgba(239,68,68,0.08)" : alertsEnabled ? "rgba(34,197,94,0.08)" : "rgba(255,255,255,0.04)";
+
   return React.createElement('div', { style:{ minHeight:"100vh", background:"#080b12", color:"#e2e8f0", fontFamily:"'Inter',-apple-system,sans-serif" } },
 
-    // HEADER
     React.createElement('div', { style:{ background:"rgba(8,11,18,0.97)", backdropFilter:"blur(20px)", borderBottom:"1px solid rgba(255,255,255,0.06)", padding:"0 16px", position:"sticky", top:0, zIndex:100, height:56, display:"flex", alignItems:"center", justifyContent:"space-between" } },
       React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:10 } },
         React.createElement('div', { style:{ width:32, height:32, borderRadius:8, background:"linear-gradient(135deg,#0ea5e9,#6366f1)", display:"flex", alignItems:"center", justifyContent:"center" } },
@@ -277,42 +326,37 @@ function App() {
       )
     ),
 
-    // CONTENT
     React.createElement('div', { style:{ maxWidth:640, margin:"0 auto", padding:"12px 12px 40px" } },
 
-      // CONTROLS
       React.createElement('div', { style:{ display:"flex", gap:8, marginBottom:12, alignItems:"center", flexWrap:"wrap" } },
         React.createElement('button', { onClick: isLive?stopLive:startLive, style:{ display:"flex", alignItems:"center", gap:6, padding:"8px 16px", borderRadius:8, border:"none", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, background: isLive?"rgba(239,68,68,0.12)":"linear-gradient(135deg,#0ea5e9,#6366f1)", color: isLive?"#ef4444":"#fff" } },
           React.createElement('div', { style:{ width:6, height:6, borderRadius:"50%", background: isLive?"#ef4444":"#fff", animation: isLive&&!refreshing?"livePulse 1.5s infinite":"none" } }),
           isLive?(refreshing?"Fetching...":"Stop Live"):"Go Live"
         ),
-        React.createElement('button', { onClick:requestAlerts, style:{ padding:"8px 12px", borderRadius:8, border:`1px solid ${alertsEnabled?"rgba(34,197,94,0.3)":"rgba(255,255,255,0.08)"}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500, background: alertsEnabled?"rgba(34,197,94,0.08)":"rgba(255,255,255,0.04)", color: alertsEnabled?"#22c55e":"#64748b" } }, alertsEnabled?"🔔 On":"🔔 Off"),
+        React.createElement('button', { onClick: handleAlertsToggle, style:{ padding:"8px 12px", borderRadius:8, border:`1px solid ${alertBtnBorder}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500, background: alertBtnBg, color: alertBtnColor } }, alertBtnLabel()),
         React.createElement('button', { onClick:()=>setSoundEnabled(s=>!s), style:{ padding:"8px 12px", borderRadius:8, border:`1px solid ${soundEnabled?"rgba(251,191,36,0.3)":"rgba(255,255,255,0.08)"}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, background: soundEnabled?"rgba(251,191,36,0.08)":"rgba(255,255,255,0.04)", color: soundEnabled?"#fbbf24":"#64748b" } }, soundEnabled?"🔊":"🔇"),
         React.createElement('button', { onClick:getAiSummary, disabled:aiLoading, style:{ padding:"8px 12px", borderRadius:8, border:"1px solid rgba(167,139,250,0.3)", cursor:aiLoading?"wait":"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500, background:"rgba(167,139,250,0.08)", color:"#a78bfa", opacity:aiLoading?0.6:1 } }, aiLoading?"✦ Analyzing...":"✦ AI Brief"),
         newCount>0&&React.createElement('div', { style:{ marginLeft:"auto", background:"rgba(251,146,60,0.1)", color:"#fb923c", border:"1px solid rgba(251,146,60,0.2)", borderRadius:20, padding:"4px 10px", fontSize:11, fontWeight:700 } }, `+${newCount} new`)
       ),
 
-      // AI SUMMARY
       aiSummary&&React.createElement('div', { style:{ background:"rgba(167,139,250,0.05)", border:"1px solid rgba(167,139,250,0.12)", borderRadius:12, padding:"14px 16px", marginBottom:12 } },
         React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:6, marginBottom:10 } },
           React.createElement('span', { style:{ fontSize:11, fontWeight:600, color:"#a78bfa" } }, "✦ AI Market Brief"),
-          React.createElement('button', { onClick:()=>setAiSummary(""), style:{ marginLeft:"auto", background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:16, padding:0, lineHeight:1 } }, "×")
+          React.createElement('button', { onClick:()=>setAiSummary(""), style:{ marginLeft:"auto", background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:16, padding:0 } }, "×")
         ),
         React.createElement('div', { style:{ fontSize:12, lineHeight:1.75, color:"#cbd5e1", whiteSpace:"pre-wrap" } }, aiSummary)
       ),
 
-      // FILTER TABS
       React.createElement('div', { style:{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:12, alignItems:"center" } },
         React.createElement('button', { onClick:()=>setFilter("all"), style:{ padding:"5px 11px", borderRadius:6, border:`1px solid ${filter==="all"?"rgba(255,255,255,0.2)":"rgba(255,255,255,0.06)"}`, background:filter==="all"?"rgba(255,255,255,0.1)":"transparent", color:filter==="all"?"#f1f5f9":"#475569", fontSize:11, fontWeight:filter==="all"?700:400, cursor:"pointer", fontFamily:"inherit" } }, "All"),
         ...Object.entries(CATEGORY_CONFIG).map(([cat,c])=>
           React.createElement('button', { key:cat, onClick:()=>setFilter(cat), style:{ padding:"5px 10px", borderRadius:6, border:`1px solid ${filter===cat?c.border:"rgba(255,255,255,0.06)"}`, background:filter===cat?c.bg:"transparent", color:filter===cat?c.color:"#475569", fontSize:11, fontWeight:filter===cat?700:400, cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" } }, c.icon+" "+c.label)
         ),
         React.createElement('div', { style:{ marginLeft:"auto", fontSize:10, color:"#334155" } },
-          filtered.length + " items · " + lastUpdate.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})
+          filtered.length + " · " + lastUpdate.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})
         )
       ),
 
-      // NEWS LIST
       React.createElement('div', { style:{ display:"flex", flexDirection:"column", gap:2 } },
         filtered.length===0&&React.createElement('div', { style:{ textAlign:"center", padding:"48px 0", color:"#334155" } },
           React.createElement('div', { style:{ fontSize:24, marginBottom:8 } }, "◇"),
@@ -322,24 +366,35 @@ function App() {
           const cat = CATEGORY_CONFIG[item.category] || CATEGORY_CONFIG.analysis;
           const srcColor = SOURCE_COLORS[item.source] || "#64748b";
           const isFlashing = flashIds.has(item.id);
+          const isMock = item.isMock;
           return React.createElement('div', {
             key: item.id,
-            onClick: ()=>item.url&&item.url!=="#"&&window.open(item.url,"_blank"),
-            style:{ background:isFlashing?"rgba(14,165,233,0.07)":"rgba(255,255,255,0.02)", border:`1px solid ${isFlashing?"rgba(14,165,233,0.18)":"rgba(255,255,255,0.05)"}`, borderLeft:`3px solid ${isFlashing?"#0ea5e9":cat.color}`, borderRadius:8, padding:"12px 14px", cursor:item.url!=="#"?"pointer":"default", transition:"all 0.3s", animation:isFlashing?"flashIn 0.4s ease":"none", marginBottom:2 },
-            onMouseEnter:e=>e.currentTarget.style.background="rgba(255,255,255,0.04)",
-            onMouseLeave:e=>e.currentTarget.style.background=isFlashing?"rgba(14,165,233,0.07)":"rgba(255,255,255,0.02)",
+            onClick: ()=>!isMock&&item.url&&item.url!=="#"&&window.open(item.url,"_blank"),
+            style:{
+              background: isFlashing?"rgba(14,165,233,0.07)": isMock?"rgba(255,255,255,0.01)":"rgba(255,255,255,0.025)",
+              border:`1px solid ${isFlashing?"rgba(14,165,233,0.18)":"rgba(255,255,255,0.05)"}`,
+              borderLeft:`3px solid ${isFlashing?"#0ea5e9": isMock?"#1e293b":cat.color}`,
+              borderRadius:8, padding:"12px 14px",
+              cursor: !isMock&&item.url!=="#"?"pointer":"default",
+              transition:"all 0.3s",
+              animation: isFlashing?"flashIn 0.4s ease":"none",
+              marginBottom:2,
+              opacity: isMock?0.4:1,
+            },
+            onMouseEnter: e=>{ if(!isMock) e.currentTarget.style.background="rgba(255,255,255,0.04)"; },
+            onMouseLeave: e=>{ e.currentTarget.style.background = isFlashing?"rgba(14,165,233,0.07)": isMock?"rgba(255,255,255,0.01)":"rgba(255,255,255,0.025)"; },
           },
             React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:6, marginBottom:7 } },
-              React.createElement('span', { style:{ fontSize:9, fontWeight:700, letterSpacing:"0.5px", color:cat.color, background:cat.bg, border:`1px solid ${cat.border}`, padding:"2px 7px", borderRadius:4 } }, cat.icon+" "+cat.label),
-              item.ticker&&React.createElement('span', { style:{ fontSize:10, fontWeight:700, color:"#94a3b8", background:"rgba(148,163,184,0.08)", border:"1px solid rgba(148,163,184,0.15)", padding:"2px 7px", borderRadius:4 } }, item.ticker),
+              React.createElement('span', { style:{ fontSize:9, fontWeight:700, letterSpacing:"0.5px", color: isMock?"#334155":cat.color, background: isMock?"rgba(255,255,255,0.03)":cat.bg, border:`1px solid ${isMock?"rgba(255,255,255,0.06)":cat.border}`, padding:"2px 7px", borderRadius:4 } }, cat.icon+" "+cat.label),
+              item.ticker&&React.createElement('span', { style:{ fontSize:10, fontWeight:700, color: isMock?"#334155":"#94a3b8", background:"rgba(148,163,184,0.08)", border:"1px solid rgba(148,163,184,0.1)", padding:"2px 7px", borderRadius:4 } }, item.ticker),
               isFlashing&&React.createElement('span', { style:{ fontSize:9, fontWeight:700, color:"#0ea5e9", background:"rgba(14,165,233,0.1)", border:"1px solid rgba(14,165,233,0.25)", padding:"2px 7px", borderRadius:4, marginLeft:"auto" } }, "NEW")
             ),
-            React.createElement('div', { style:{ fontSize:13, lineHeight:1.55, color:"#e2e8f0", fontWeight:450, marginBottom:8 } }, item.title),
+            React.createElement('div', { style:{ fontSize:13, lineHeight:1.55, color: isMock?"#334155":"#e2e8f0", fontWeight:450, marginBottom:8 } }, item.title),
             React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:8 } },
-              React.createElement('span', { style:{ fontSize:10, fontWeight:600, color:srcColor } }, item.source),
-              React.createElement('span', { style:{ fontSize:10, color:"#334155" } }, "·"),
-              React.createElement('span', { style:{ fontSize:10, color:"#475569" } }, timeAgo(item.time)),
-              item.url&&item.url!=="#"&&React.createElement('span', { style:{ marginLeft:"auto", fontSize:11, color:"#334155" } }, "↗")
+              React.createElement('span', { style:{ fontSize:10, fontWeight:600, color: isMock?"#334155":srcColor } }, item.source),
+              React.createElement('span', { style:{ fontSize:10, color:"#1e293b" } }, "·"),
+              React.createElement('span', { style:{ fontSize:10, color: isMock?"#1e293b":"#475569" } }, timeAgo(item.time)),
+              isMock&&React.createElement('span', { style:{ fontSize:9, color:"#1e293b", marginLeft:"auto" } }, "example")
             )
           );
         })
