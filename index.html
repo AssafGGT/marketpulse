@@ -13,24 +13,23 @@
   <link rel="icon" type="image/png" href="icons/icon-192.png" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0a0b0e; color: #e8eaf0; font-family: 'IBM Plex Mono', 'Courier New', monospace; }
+    body { background: #080b12; color: #e2e8f0; font-family: 'Inter', -apple-system, sans-serif; }
     #root { min-height: 100vh; }
-    .loading { display: flex; align-items: center; justify-content: center; height: 100vh; color: #00d4ff; font-size: 14px; letter-spacing: 0.15em; }
+    .loading { display: flex; align-items: center; justify-content: center; height: 100vh; color: #0ea5e9; font-size: 13px; letter-spacing: 0.1em; }
   </style>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet" />
 </head>
 <body>
-  <div id="root"><div class="loading">INITIALIZING MARKETPULSE...</div></div>
+  <div id="root"><div class="loading">Loading MarketPulse...</div></div>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" src="app.js"></script>
+  <script type="text/babel" src="app.js?v=3"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js')
-          .then(reg => console.log('SW registered'))
-          .catch(err => console.log('SW error:', err));
+      // מחק service workers ישנים כדי למנוע cache בעיות
+      navigator.serviceWorker.getRegistrations().then(regs => {
+        regs.forEach(reg => reg.unregister());
       });
     }
   </script>
