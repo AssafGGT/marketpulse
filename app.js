@@ -1,8 +1,8 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
 const CORS_PROXY = "https://api.allorigins.win/get?url=";
-const CACHE_KEY = "marketpulse_news_v2";
-const SEEN_KEY = "marketpulse_seen_v2";
+const CACHE_KEY = "marketpulse_v3";
+const SEEN_KEY = "marketpulse_seen_v3";
 const MAX_NEWS = 120;
 
 const RSS_SOURCES = [
@@ -61,25 +61,45 @@ function extractTicker(title) {
   return matches.find(m => !skip.has(m)) || null;
 }
 
+function makeId(sourceName, title) {
+  let hash = 0;
+  const str = sourceName + title;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return sourceName.slice(0,3) + "_" + Math.abs(hash).toString(36);
+}
+
 function parseRSSItems(xmlText, sourceName) {
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(xmlText, "text/xml");
-    return Array.from(doc.querySelectorAll("item")).slice(0, 12).map((item) => {
-      const title = (item.querySelector("title")?.textContent || "").replace(/<!\[CDATA\[|\]\]>/g, "").replace(/<[^>]+>/g, "").trim();
+    const seen = new Set();
+    const results = [];
+    for (const item of doc.querySelectorAll("item")) {
+      const title = (item.querySelector("title")?.textContent || "")
+        .replace(/<!\[CDATA\[|\]\]>/g, "").replace(/<[^>]+>/g, "").trim();
+      if (!title || title.length < 10) continue;
+      const id = makeId(sourceName, title);
+      if (seen.has(id)) continue;
+      seen.add(id);
       const link = item.querySelector("link")?.textContent || "#";
       const pubDate = item.querySelector("pubDate")?.textContent;
-      return {
-        id: sourceName + "-" + btoa(encodeURIComponent(title)).slice(0, 16),
-        title, source: sourceName,
+      results.push({
+        id, title, source: sourceName,
         time: pubDate ? new Date(pubDate) : new Date(),
-        category: classifyNews(title), ticker: extractTicker(title), isNew: true, url: link,
-      };
-    }).filter(item => item.title.length > 10);
+        category: classifyNews(title),
+        ticker: extractTicker(title),
+        isNew: true, url: link,
+      });
+      if (results.length >= 10) break;
+    }
+    return results;
   } catch { return []; }
 }
 
-function loadCachedNews() {
+function loadCache() {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
@@ -87,22 +107,22 @@ function loadCachedNews() {
   } catch { return null; }
 }
 
-function saveCachedNews(news) {
+function saveCache(news) {
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(news.slice(0, MAX_NEWS))); } catch {}
 }
 
-function loadSeenIds() {
+function loadSeen() {
   try {
     const raw = localStorage.getItem(SEEN_KEY);
     return raw ? new Set(JSON.parse(raw)) : new Set();
   } catch { return new Set(); }
 }
 
-function saveSeenIds(ids) {
-  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...ids].slice(-500))); } catch {}
+function saveSeen(ids) {
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...ids].slice(-800))); } catch {}
 }
 function App() {
-  const cached = loadCachedNews();
+  const cached = loadCache();
   const [news, setNews] = useState(cached && cached.length > 0 ? cached : MOCK_NEWS);
   const [filter, setFilter] = useState("all");
   const [alertsEnabled, setAlertsEnabled] = useState(false);
@@ -116,11 +136,11 @@ function App() {
   const [now, setNow] = useState(new Date());
   const [flashIds, setFlashIds] = useState(new Set());
   const audioCtx = useRef(null);
-  const seenIds = useRef(loadSeenIds());
+  const seenIds = useRef(loadSeen());
   const intervalRef = useRef(null);
 
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
-  useEffect(() => { saveCachedNews(news); }, [news]);
+  useEffect(() => { saveCache(news); }, [news]);
 
   const playAlert = useCallback(() => {
     if (!soundEnabled) return;
@@ -141,7 +161,7 @@ function App() {
   const sendNotification = useCallback((item) => {
     if (!alertsEnabled || Notification.permission !== "granted") return;
     const cat = CATEGORY_CONFIG[item.category] || {};
-    new Notification(`${cat.icon || "◈"} ${item.ticker ? item.ticker + "  ·  " : ""}${item.source}`, {
+    new Notification(`${cat.icon || "◈"} ${item.ticker ? item.ticker + " · " : ""}${item.source}`, {
       body: item.title, icon: "icons/icon-192.png", vibrate: [100, 50, 100], tag: item.id,
     });
   }, [alertsEnabled]);
@@ -160,24 +180,40 @@ function App() {
       try {
         const resp = await fetch(`${CORS_PROXY}${encodeURIComponent(src.url)}`);
         const data = await resp.json();
-        allFetched = [...allFetched, ...parseRSSItems(data.contents, src.name)];
+        const items = parseRSSItems(data.contents, src.name);
+        allFetched = [...allFetched, ...items];
       } catch {}
     }
-    allFetched.sort((a, b) => b.time - a.time);
-    const fresh = allFetched.filter(item => !seenIds.current.has(item.id));
+
+    // Deduplicate by id across all sources
+    const dedupMap = new Map();
+    for (const item of allFetched) {
+      if (!dedupMap.has(item.id)) dedupMap.set(item.id, item);
+    }
+    const deduped = [...dedupMap.values()];
+    deduped.sort((a, b) => b.time - a.time);
+
+    const fresh = deduped.filter(item => !seenIds.current.has(item.id));
+
     if (fresh.length > 0) {
       fresh.forEach(item => seenIds.current.add(item.id));
-      saveSeenIds(seenIds.current);
+      saveSeen(seenIds.current);
+
       const freshIds = new Set(fresh.map(i => i.id));
       setFlashIds(freshIds);
       setTimeout(() => setFlashIds(new Set()), 4000);
+
       setNews(prev => {
         const existingIds = new Set(prev.map(n => n.id));
         const trulyNew = fresh.filter(n => !existingIds.has(n.id));
-        const merged = [...trulyNew, ...prev].slice(0, MAX_NEWS);
-        merged.sort((a, b) => b.time - a.time);
-        return merged;
+        const merged = [...trulyNew, ...prev];
+        // Deduplicate merged list
+        const seen = new Set();
+        const unique = merged.filter(n => { if (seen.has(n.id)) return false; seen.add(n.id); return true; });
+        unique.sort((a, b) => b.time - a.time);
+        return unique.slice(0, MAX_NEWS);
       });
+
       setNewCount(c => c + fresh.length);
       fresh.slice(0, 3).forEach((item, i) => {
         setTimeout(() => { playAlert(); sendNotification(item); }, i * 400);
@@ -206,10 +242,22 @@ function App() {
     setAiLoading(false);
   };
 
-  const filtered = news.filter(item => filter === "all" || item.category === filter);
-  const marketOpen = (() => { const d = new Date(); const day = d.getUTCDay(); const mins = d.getUTCHours()*60+d.getUTCMinutes(); return day>=1&&day<=5&&mins>=870&&mins<1230; })();
+  // FILTER — זה הקריטי שתוקן
+  const filtered = news.filter(item => {
+    if (filter === "all") return true;
+    return item.category === filter;
+  });
+
+  const marketOpen = (() => {
+    const d = new Date();
+    const day = d.getUTCDay();
+    const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
+    return day >= 1 && day <= 5 && mins >= 870 && mins < 1230;
+  })();
 
   return React.createElement('div', { style:{ minHeight:"100vh", background:"#080b12", color:"#e2e8f0", fontFamily:"'Inter',-apple-system,sans-serif" } },
+
+    // HEADER
     React.createElement('div', { style:{ background:"rgba(8,11,18,0.97)", backdropFilter:"blur(20px)", borderBottom:"1px solid rgba(255,255,255,0.06)", padding:"0 16px", position:"sticky", top:0, zIndex:100, height:56, display:"flex", alignItems:"center", justifyContent:"space-between" } },
       React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:10 } },
         React.createElement('div', { style:{ width:32, height:32, borderRadius:8, background:"linear-gradient(135deg,#0ea5e9,#6366f1)", display:"flex", alignItems:"center", justifyContent:"center" } },
@@ -228,7 +276,11 @@ function App() {
         React.createElement('div', { style:{ fontSize:11, color:"#334155", fontVariantNumeric:"tabular-nums" } }, now.toLocaleTimeString("en-US",{hour12:false}))
       )
     ),
+
+    // CONTENT
     React.createElement('div', { style:{ maxWidth:640, margin:"0 auto", padding:"12px 12px 40px" } },
+
+      // CONTROLS
       React.createElement('div', { style:{ display:"flex", gap:8, marginBottom:12, alignItems:"center", flexWrap:"wrap" } },
         React.createElement('button', { onClick: isLive?stopLive:startLive, style:{ display:"flex", alignItems:"center", gap:6, padding:"8px 16px", borderRadius:8, border:"none", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, background: isLive?"rgba(239,68,68,0.12)":"linear-gradient(135deg,#0ea5e9,#6366f1)", color: isLive?"#ef4444":"#fff" } },
           React.createElement('div', { style:{ width:6, height:6, borderRadius:"50%", background: isLive?"#ef4444":"#fff", animation: isLive&&!refreshing?"livePulse 1.5s infinite":"none" } }),
@@ -239,6 +291,8 @@ function App() {
         React.createElement('button', { onClick:getAiSummary, disabled:aiLoading, style:{ padding:"8px 12px", borderRadius:8, border:"1px solid rgba(167,139,250,0.3)", cursor:aiLoading?"wait":"pointer", fontFamily:"inherit", fontSize:12, fontWeight:500, background:"rgba(167,139,250,0.08)", color:"#a78bfa", opacity:aiLoading?0.6:1 } }, aiLoading?"✦ Analyzing...":"✦ AI Brief"),
         newCount>0&&React.createElement('div', { style:{ marginLeft:"auto", background:"rgba(251,146,60,0.1)", color:"#fb923c", border:"1px solid rgba(251,146,60,0.2)", borderRadius:20, padding:"4px 10px", fontSize:11, fontWeight:700 } }, `+${newCount} new`)
       ),
+
+      // AI SUMMARY
       aiSummary&&React.createElement('div', { style:{ background:"rgba(167,139,250,0.05)", border:"1px solid rgba(167,139,250,0.12)", borderRadius:12, padding:"14px 16px", marginBottom:12 } },
         React.createElement('div', { style:{ display:"flex", alignItems:"center", gap:6, marginBottom:10 } },
           React.createElement('span', { style:{ fontSize:11, fontWeight:600, color:"#a78bfa" } }, "✦ AI Market Brief"),
@@ -246,23 +300,31 @@ function App() {
         ),
         React.createElement('div', { style:{ fontSize:12, lineHeight:1.75, color:"#cbd5e1", whiteSpace:"pre-wrap" } }, aiSummary)
       ),
+
+      // FILTER TABS
       React.createElement('div', { style:{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:12, alignItems:"center" } },
-        React.createElement('button', { onClick:()=>setFilter("all"), style:{ padding:"5px 11px", borderRadius:6, border:`1px solid ${filter==="all"?"rgba(255,255,255,0.18)":"rgba(255,255,255,0.06)"}`, background:filter==="all"?"rgba(255,255,255,0.08)":"transparent", color:filter==="all"?"#f1f5f9":"#475569", fontSize:11, fontWeight:filter==="all"?600:400, cursor:"pointer", fontFamily:"inherit" } }, "All"),
+        React.createElement('button', { onClick:()=>setFilter("all"), style:{ padding:"5px 11px", borderRadius:6, border:`1px solid ${filter==="all"?"rgba(255,255,255,0.2)":"rgba(255,255,255,0.06)"}`, background:filter==="all"?"rgba(255,255,255,0.1)":"transparent", color:filter==="all"?"#f1f5f9":"#475569", fontSize:11, fontWeight:filter==="all"?700:400, cursor:"pointer", fontFamily:"inherit" } }, "All"),
         ...Object.entries(CATEGORY_CONFIG).map(([cat,c])=>
-          React.createElement('button', { key:cat, onClick:()=>setFilter(cat), style:{ padding:"5px 10px", borderRadius:6, border:`1px solid ${filter===cat?c.border:"rgba(255,255,255,0.06)"}`, background:filter===cat?c.bg:"transparent", color:filter===cat?c.color:"#475569", fontSize:11, fontWeight:filter===cat?600:400, cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" } }, c.icon+" "+c.label)
+          React.createElement('button', { key:cat, onClick:()=>setFilter(cat), style:{ padding:"5px 10px", borderRadius:6, border:`1px solid ${filter===cat?c.border:"rgba(255,255,255,0.06)"}`, background:filter===cat?c.bg:"transparent", color:filter===cat?c.color:"#475569", fontSize:11, fontWeight:filter===cat?700:400, cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" } }, c.icon+" "+c.label)
         ),
-        React.createElement('div', { style:{ marginLeft:"auto", fontSize:10, color:"#334155" } }, lastUpdate.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"}))
+        React.createElement('div', { style:{ marginLeft:"auto", fontSize:10, color:"#334155" } },
+          filtered.length + " items · " + lastUpdate.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})
+        )
       ),
+
+      // NEWS LIST
       React.createElement('div', { style:{ display:"flex", flexDirection:"column", gap:2 } },
         filtered.length===0&&React.createElement('div', { style:{ textAlign:"center", padding:"48px 0", color:"#334155" } },
           React.createElement('div', { style:{ fontSize:24, marginBottom:8 } }, "◇"),
           React.createElement('div', { style:{ fontSize:13 } }, "No news in this category")
         ),
         filtered.map((item)=>{
-          const cat=CATEGORY_CONFIG[item.category]||CATEGORY_CONFIG.analysis;
-          const srcColor=SOURCE_COLORS[item.source]||"#64748b";
-          const isFlashing=flashIds.has(item.id);
-          return React.createElement('div', { key:item.id, onClick:()=>item.url&&item.url!=="#"&&window.open(item.url,"_blank"),
+          const cat = CATEGORY_CONFIG[item.category] || CATEGORY_CONFIG.analysis;
+          const srcColor = SOURCE_COLORS[item.source] || "#64748b";
+          const isFlashing = flashIds.has(item.id);
+          return React.createElement('div', {
+            key: item.id,
+            onClick: ()=>item.url&&item.url!=="#"&&window.open(item.url,"_blank"),
             style:{ background:isFlashing?"rgba(14,165,233,0.07)":"rgba(255,255,255,0.02)", border:`1px solid ${isFlashing?"rgba(14,165,233,0.18)":"rgba(255,255,255,0.05)"}`, borderLeft:`3px solid ${isFlashing?"#0ea5e9":cat.color}`, borderRadius:8, padding:"12px 14px", cursor:item.url!=="#"?"pointer":"default", transition:"all 0.3s", animation:isFlashing?"flashIn 0.4s ease":"none", marginBottom:2 },
             onMouseEnter:e=>e.currentTarget.style.background="rgba(255,255,255,0.04)",
             onMouseLeave:e=>e.currentTarget.style.background=isFlashing?"rgba(14,165,233,0.07)":"rgba(255,255,255,0.02)",
@@ -282,8 +344,12 @@ function App() {
           );
         })
       ),
-      React.createElement('div', { style:{ marginTop:32, textAlign:"center", color:"#1e293b", fontSize:10 } }, filtered.length+" items  ·  Benzinga  Reuters  MarketWatch  Seeking Alpha")
+
+      React.createElement('div', { style:{ marginTop:32, textAlign:"center", color:"#1e293b", fontSize:10 } },
+        "MarketPulse · Benzinga · Reuters · MarketWatch · Seeking Alpha"
+      )
     ),
+
     React.createElement('style', null, `
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap');
       *{box-sizing:border-box} body{-webkit-font-smoothing:antialiased}
