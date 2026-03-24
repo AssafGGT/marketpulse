@@ -9,7 +9,7 @@ const BUILD_INFO = "v9 · 24.03.2026";
 const RSS_SOURCES = [
   { name: "Benzinga",      url: "https://www.benzinga.com/feed" },
   { name: "MarketWatch",   url: "https://feeds.content.dowjones.io/public/rss/mw_topstories" },
-  { name: "Reuters",       url: "https://feeds.reuters.com/reuters/businessNews" },
+  { name: "AP News",       url: "https://feeds.feedburner.com/APFinance" },
   { name: "Seeking Alpha", url: "https://seekingalpha.com/market_currents.xml" },
 ];
 
