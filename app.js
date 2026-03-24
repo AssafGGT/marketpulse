@@ -7,10 +7,10 @@ const MAX_NEWS = 120;
 const BUILD_INFO = "v9 · 24.03.2026";
 
 const RSS_SOURCES = [
-  { name: "Benzinga",      url: "https://www.benzinga.com/feed" },
-  { name: "MarketWatch",   url: "https://feeds.content.dowjones.io/public/rss/mw_topstories" },
-  { name: "AP News",       url: "https://feeds.feedburner.com/APFinance" },
-  { name: "Seeking Alpha", url: "https://seekingalpha.com/market_currents.xml" },
+  { name: "Benzinga",    url: "https://www.benzinga.com/feed" },
+  { name: "MarketWatch", url: "https://feeds.content.dowjones.io/public/rss/mw_topstories" },
+  { name: "CNBC",        url: "https://www.cnbc.com/id/100003114/device/rss/rss.html" },
+  { name: "Yahoo Finance", url: "https://finance.yahoo.com/news/rssindex" },
 ];
 
 const CATEGORY_CONFIG = {
