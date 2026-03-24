@@ -4,7 +4,7 @@ const CORS_PROXY = "https://corsproxy.io/?url=";
 const CACHE_KEY = "marketpulse_news";
 const SEEN_KEY = "marketpulse_seen";
 const MAX_NEWS = 120;
-const BUILD_INFO = "v9 · 24.03.2026";
+const BUILD_INFO = "v11 · 24.03.2026";
 
 const RSS_SOURCES = [
   { name: "Benzinga",    url: "https://www.benzinga.com/feed" },
