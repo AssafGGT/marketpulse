@@ -1,10 +1,10 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
-const CORS_PROXY = "https://api.allorigins.win/get?url=";
+const CORS_PROXY = "https://corsproxy.io/?url=";
 const CACHE_KEY = "marketpulse_news";
 const SEEN_KEY = "marketpulse_seen";
 const MAX_NEWS = 120;
-const BUILD_INFO = "v8 · 23.03.2026";
+const BUILD_INFO = "v9 · 24.03.2026";
 
 const RSS_SOURCES = [
   { name: "Benzinga",      url: "https://www.benzinga.com/feed" },
@@ -76,10 +76,9 @@ async function fetchSource(src) {
   const feedUrl = src.url + (src.url.includes("?") ? "&" : "?") + "_=" + ts;
   const proxyUrl = CORS_PROXY + encodeURIComponent(feedUrl);
   const resp = await fetch(proxyUrl, { cache: "no-store" });
-  const data = await resp.json();
-  if (!data.contents) return [];
+  const text = await resp.text();
   const parser = new DOMParser();
-  const doc = parser.parseFromString(data.contents, "text/xml");
+  const doc = parser.parseFromString(text, "text/xml");
   const items = Array.from(doc.querySelectorAll("item")).slice(0, 15);
   return items.map(item => {
     const title = (item.querySelector("title")?.textContent || "")
@@ -304,8 +303,7 @@ function App() {
         newCount>0&&React.createElement('div', { style:{ marginLeft:"auto", background:"rgba(251,146,60,0.1)", color:"#fb923c", border:"1px solid rgba(251,146,60,0.2)", borderRadius:20, padding:"4px 10px", fontSize:11, fontWeight:700 } }, `+${newCount} new`)
       ),
 
-      // SOURCE STATUS
-      isLive&&React.createElement('div', { style:{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 } },
+      isLive&&React.createElement('div', { style:{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 } },
         RSS_SOURCES.map(src =>
           React.createElement('div', { key:src.name, style:{ display:"flex", alignItems:"center", gap:4, fontSize:9, color: sourceStatus[src.name]==="ok"?"#22c55e":sourceStatus[src.name]==="error"?"#ef4444":"#475569" } },
             React.createElement('div', { style:{ width:5, height:5, borderRadius:"50%", background: sourceStatus[src.name]==="ok"?"#22c55e":sourceStatus[src.name]==="error"?"#ef4444":"#334155" } }),
