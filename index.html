@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="MarketPulse" />
-  <title>MarketPulse · By Assaf Peled</title>
+  <title>MarketPulse · Assaf Peled</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" href="icons/icon-192.png" />
@@ -21,23 +21,24 @@
 </head>
 <body>
   <div id="root"><div class="loading">Loading MarketPulse...</div></div>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+
   <script>
-    // נקה cache ישן אוטומטית
-    const APP_VERSION = "4";
+    const APP_VERSION = "9";
     if (localStorage.getItem("mp_version") !== APP_VERSION) {
       localStorage.clear();
       localStorage.setItem("mp_version", APP_VERSION);
     }
-    // בטל service workers ישנים
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistrations().then(regs => {
         regs.forEach(reg => reg.unregister());
       });
     }
   </script>
-  <script type="text/babel" src="app.js?v=9"></script>
+
+  <script type="text/babel" data-presets="react" src="app.js?v=10"></script>
 </body>
 </html>
